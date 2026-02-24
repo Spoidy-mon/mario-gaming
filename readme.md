@@ -1,181 +1,384 @@
-Mario Gaming - Gaming Shop Management System
-Project Overview
-Mario Gaming is a client-server desktop application designed for managing two gaming shops. It allows the manager to monitor and control gaming computers and PS5 consoles over a local network. Key features include:
+Here is a complete, self-contained **README.md** file specifically for the **client side** (the gaming PC app). 
 
-Device Status Monitoring: View online/offline status, game on/off.
-Session Management: Start gaming sessions with fixed rates (100 Rs/hour), timer starts after 1 minute.
-Time Over Handling: On gaming PCs, shows a full-screen overlay message when time expires. For PS5, turns off power via smart plug.
-Extra Time: Add extra time to active sessions from manager dashboard, automatically closes overlay on client.
-Security: Resume/unlock overlay on client requires hashed password.
-Real-Time Updates: Socket.io for live online/offline and session changes.
-Installable Apps: Manager and client apps as .exe for Windows.
+You can copy-paste this entire content into a new file called `README.md` inside your `computer-client` folder (or `mario-gaming-client` folder).
 
-The system is built with Node.js backend, React frontend for manager, Electron for desktop apps.
-Assumptions:
+```markdown
+# Mario Gaming Client
 
-All devices on same Wi-Fi network.
-Backend runs on manager's laptop.
-Rates fixed at 100 Rs/hour (configurable in code).
-No online payments – cash only.
+This is the **client application** that runs on each gaming PC in the shop.
 
-Tech Stack & Dependencies
-Global / Root Dependencies (mario-gaming/package.json)
+## Purpose
 
-dotenv: ^16.4.5 – Environment variables.
-express: ^4.19.2 – Backend API server.
-node-kasa: ^1.0.3 – PS5 smart plug control (TP-Link Kasa).
-socket.io: ^4.7.5 – Real-time communication.
-sqlite3: ^5.1.7 – Database.
+- Runs in the background on each gaming computer.
+- Connects to the central server (manager laptop).
+- Registers the PC with a unique device ID.
+- Sends periodic heartbeats to stay marked as "online".
+- Displays a full-screen overlay message when the session time expires.
+- Allows the manager (or user) to unlock/resume the screen with a password.
 
-Server Dependencies (server/package.json)
+## Features
 
-express
-sqlite3
-socket.io
-socket.io-client
-node-kasa
+- Silent background mode (no main window visible)
+- Real-time connection via Socket.io
+- Full-screen time-over overlay
+- Password-protected resume/unlock button
+- Auto-reconnect on disconnect
+- Easy to build as portable .exe
 
-Manager Dependencies (manager/package.json)
+## Requirements
 
-react: ^18.3.1
-react-dom: ^18.3.1
-react-scripts: 5.0.1
-socket.io-client: ^4.7.5
-react-toastify: ^9.1.3 – For popup alerts (install with npm install react-toastify)
-devDependencies: @electron-forge/cli, @electron-forge/maker-squirrel, electron, electron-is-dev
+- Windows 10 or 11 (64-bit)
+- Same Wi-Fi network as the manager laptop
+- Node.js LTS (v18, v20, or v22 recommended) installed on the client PC
 
-Computer-Client Dependencies (computer-client/package.json)
+## File Structure
 
-electron: ^31.0.0
-socket.io-client: ^4.7.5
-devDependencies: electron-builder, electron-packager
+```
+computer-client/
+├── main.js               # Main Electron process (logic, socket, overlay control)
+├── overlay.html          # Full-screen time-over message + password prompt
+├── preload.js            # IPC bridge between renderer and main process
+├── package.json          # Dependencies and build scripts
+└── README.md             # This file
+```
 
-PS5-Controller Dependencies (ps5-controller/package.json)
+## Full Code for Each File
 
-node-kasa: ^1.0.3
+### main.js
 
-Global tools:
+```javascript
+const { app, BrowserWindow, screen, ipcMain } = require('electron');
+const path = require('path');
+const io = require('socket.io-client');
 
-electron-forge (global install: npm install -g electron-forge)
+// ────────────────────────────────────────────────
+// CHANGE THESE TWO LINES FOR EACH GAMING PC
+const SERVER_URL = 'http://192.168.1.105:3000';  // ← Manager laptop IP (from ipconfig)
+const DEVICE_ID = 1;                             // ← Unique: 1, 2, 3... per PC
+// ────────────────────────────────────────────────
 
-File Structure & Descriptions
-text mario-gaming/
-├── .gitignore                # Git ignore file (node_modules, db files, builds)
-├── package.json              # Root package with shared deps and scripts
-├── README.md                 # This file
-├── mario_gaming.db           # SQLite database (auto-created)
-├── server/
-│   ├── db.js                 # Database setup, tables, seed devices
-│   ├── devices.json          # Initial devices config (PCs and PS5s)
-│   ├── index.js              # Backend Express server, API, Socket.io, timers
-│   └── package.json          # Server deps
-├── manager/
-│   ├── public/
-│   │   └── index.html        # React entry HTML
-│   ├── src/
-│   │   ├── App.js            # Manager dashboard React component (table, buttons)
-│   │   ├── index.js          # React root render
-│   │   └── styles.css        # Basic CSS for table
-│   ├── main.js               # Electron main process (loads React)
-│   ├── preload.js            # Electron preload (optional IPC)
-│   ├── forge.config.js       # Electron Forge config
-│   └── package.json          # Manager deps and scripts
-├── computer-client/
-│   ├── overlay.html          # Full-screen time-over message (with password resume)
-│   ├── main.js               # Electron background app (socket, overlay logic)
-│   ├── preload.js            # IPC for closing overlay
-│   ├── forge.config.js       # Optional Forge config
-│   └── package.json          # Client deps and build scripts
-├── ps5-controller/
-│   ├── index.js              # Script to control PS5 smart plug
-│   └── package.json          # Deps for Kasa
-File Details
-Root
+let overlayWindow = null;
 
-.gitignore: Ignores node_modules, .db, builds, logs.
-package.json: Scripts to start server/manager/client, shared deps.
-README.md: Project docs.
-mario_gaming.db: SQLite DB with devices and sessions tables.
+const socket = io(SERVER_URL, {
+  reconnection: true,
+  reconnectionAttempts: Infinity,
+  reconnectionDelay: 1000,
+  timeout: 10000,
+  transports: ['websocket']
+});
 
-Server
+function createOverlay() {
+  if (overlayWindow && !overlayWindow.isDestroyed()) return;
 
-db.js: Creates tables for devices/sessions, seeds from devices.json.
-devices.json: JSON array of devices (name, type, shop_id, ip).
-index.js: Express API (/devices GET, /session POST, /extra-time POST), Socket.io, timers, CORS.
-package.json: Deps for server.
+  const { width, height } = screen.getPrimaryDisplay().workAreaSize;
 
-Manager
+  overlayWindow = new BrowserWindow({
+    width,
+    height,
+    x: 0,
+    y: 0,
+    frame: false,
+    alwaysOnTop: true,
+    fullscreen: true,
+    transparent: false,
+    backgroundColor: '#000000',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      nodeIntegration: false,
+      contextIsolation: true
+    }
+  });
 
-public/index.html: Basic HTML with #root div for React.
-src/App.js: React component with table, start session, add extra time, socket listeners, toasts.
-src/index.js: ReactDOM render App.
-src/styles.css: Table styling.
-main.js: Electron window creation, loads React dev server or build.
-preload.js: Empty for now.
-forge.config.js: Build config for .exe.
-package.json: React + Electron deps.
+  overlayWindow.loadFile(path.join(__dirname, 'overlay.html'));
+  overlayWindow.setAlwaysOnTop(true, 'screen-saver');
 
-Computer-Client
+  overlayWindow.on('closed', () => {
+    overlayWindow = null;
+  });
 
-overlay.html: HTML for time-over screen with password prompt + hash check.
-main.js: Background Electron, socket connect/register/heartbeat, overlay on time_over, close on resume.
-preload.js: Exposes closeOverlay API.
-forge.config.js: Optional for build.
-package.json: Electron + socket deps, build scripts.
+  console.log(`Overlay created for device ${DEVICE_ID}`);
+}
 
-PS5-Controller
+app.whenReady().then(() => {
+  // No main window – background only
 
-index.js: Standalone script to turn off plug (can be called from server).
-package.json: node-kasa dep.
+  socket.on('connect', () => {
+    console.log('Connected to server');
+    socket.emit('register', DEVICE_ID);
+  });
 
-Installation & Running on Manager Laptop
+  socket.on('time_over', () => {
+    console.log(`Time over received for device ${DEVICE_ID}`);
+    createOverlay();
+  });
 
-Install Node.js LTS (nodejs.org).
-Clone repo or copy folder.
-In root: npm install
-In server: cd server && npm install
-In manager: cd manager && npm install
-Run backend: npm run start-server
-Run manager: npm run start-react (browser) or npm start (Electron)
-Configure devices.json with real IPs/IDs.
+  socket.on('resume', () => {
+    console.log('Resume signal received – closing overlay');
+    if (overlayWindow && !overlayWindow.isDestroyed()) {
+      overlayWindow.close();
+      overlayWindow = null;
+    }
+  });
 
-Installation & Running on Client PC
+  socket.on('connect_error', (err) => {
+    console.error('Connection error:', err.message);
+  });
 
-Install Node.js LTS.
-Copy computer-client folder to client PC.
+  socket.on('disconnect', (reason) => {
+    console.log('Disconnected:', reason);
+  });
+
+  // Heartbeat
+  setInterval(() => {
+    if (socket.connected) socket.emit('heartbeat', DEVICE_ID);
+  }, 30000);
+});
+
+ipcMain.on('close-overlay', () => {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.close();
+    overlayWindow = null;
+    console.log('Overlay closed via password');
+  }
+});
+
+app.on('window-all-closed', () => {
+  // Keep running in background even if overlay closes
+});
+```
+
+### overlay.html
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Time Over - Mario Gaming</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      height: 100vh;
+      background: linear-gradient(135deg, #000, #200000);
+      color: #ff4444;
+      font-family: Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      overflow: hidden;
+    }
+    h1 {
+      font-size: 6rem;
+      margin: 0 0 20px;
+      text-shadow: 0 0 20px #ff0000;
+      animation: pulse 2s infinite;
+    }
+    p {
+      font-size: 2.2rem;
+      margin: 10px 0;
+      max-width: 800px;
+    }
+    .btn {
+      margin-top: 40px;
+      padding: 15px 40px;
+      font-size: 1.8rem;
+      background: #ff4444;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      box-shadow: 0 0 20px #ff4444;
+      transition: all 0.3s;
+    }
+    .btn:hover {
+      background: #ff6666;
+      transform: scale(1.05);
+    }
+    #password-section {
+      display: none;
+      margin-top: 30px;
+    }
+    #password-input {
+      padding: 12px;
+      font-size: 1.5rem;
+      width: 300px;
+      margin-right: 10px;
+      border-radius: 6px;
+      border: 2px solid #ff4444;
+    }
+    #error-msg {
+      color: #ff9999;
+      font-size: 1.4rem;
+      margin-top: 10px;
+    }
+    @keyframes pulse {
+      0% { transform: scale(1); }
+      50% { transform: scale(1.05); }
+      100% { transform: scale(1); }
+    }
+  </style>
+</head>
+<body>
+  <h1>TIME OVER!</h1>
+  <p>Your gaming session has ended.</p>
+  <p>Please ask the manager to add more time or unlock manually.</p>
+
+  <button class="btn" onclick="showPasswordPrompt()">Resume / Unlock</button>
+
+  <div id="password-section">
+    <input type="password" id="password-input" placeholder="Enter password" autofocus>
+    <button class="btn" onclick="checkPassword()">Submit</button>
+    <div id="error-msg"></div>
+  </div>
+
+  <script>
+    // CHANGE THIS HASHED PASSWORD (generate once)
+    // Run in Node.js: crypto.createHash('sha256').update('yourpass').digest('hex')
+    const STORED_HASH = "e7d80ffeb3a2d0e8f8a4e3c6b5d7e8f9a0b1c2d3e4f5g6h7i8j9k0l1m2n3o4p5"; // example
+
+    function showPasswordPrompt() {
+      document.getElementById('password-section').style.display = 'block';
+      document.getElementById('password-input').focus();
+    }
+
+    async function checkPassword() {
+      const input = document.getElementById('password-input').value.trim();
+      const errorMsg = document.getElementById('error-msg');
+
+      if (!input) {
+        errorMsg.textContent = 'Please enter a password';
+        return;
+      }
+
+      const encoder = new TextEncoder();
+      const data = encoder.encode(input);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+
+      if (hashHex === STORED_HASH) {
+        window.electronAPI?.closeOverlay();
+        document.body.innerHTML = '<h1 style="color:#0f0">Resuming...</h1>';
+        setTimeout(() => window.close(), 1500);
+      } else {
+        errorMsg.textContent = 'Incorrect password. Try again.';
+        document.getElementById('password-input').value = '';
+        document.getElementById('password-input').focus();
+      }
+    }
+
+    document.getElementById('password-input').addEventListener('keypress', e => {
+      if (e.key === 'Enter') checkPassword();
+    });
+  </script>
+</body>
+</html>
+```
+
+### 3. preload.js (full code – IPC bridge)
+
+```javascript
+const { contextBridge, ipcRenderer } = require('electron');
+
+contextBridge.exposeInMainWorld('electronAPI', {
+  closeOverlay: () => ipcRenderer.send('close-overlay')
+});
+```
+
+### 4. package.json (full code – with portable target for easier build)
+
+```json
+{
+  "name": "mario-gaming-client",
+  "version": "1.0.0",
+  "description": "Client app for gaming PCs - Mario Gaming",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "author": "Spider",
+  "license": "ISC",
+  "dependencies": {
+    "socket.io-client": "^4.7.5"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.spider.mario-gaming-client",
+    "productName": "Mario Gaming Client",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": "portable"  // single .exe file – no installer needed
+    }
+  }
+}
+```
+
+### Installation & Running on Client PC
+
+1. Install **Node.js LTS** (https://nodejs.org)
+2. Create folder → copy above 4 files
+3. Open terminal in folder:
+
+   ```powershell
+   npm install
+   ```
+
+4. Update `main.js`:
+   - `SERVER_URL` → manager laptop IP (run `ipconfig` on manager)
+   - `DEVICE_ID` → unique number (1, 2, 3...)
+
+5. Test:
+
+   ```powershell
+   npm start
+   ```
+
+   Look for: `Connected to server`
+
+6. Build .exe:
+
+   ```powershell
+   npm run dist
+   ```
+
+   → Find `Mario Gaming Client.exe` in `dist/` folder
+
+### Dependencies
+
+- **Runtime**:
+  - socket.io-client (^4.7.5) – real-time communication
+
+- **Dev**:
+  - electron (^31.0.0) – desktop app framework
+  - electron-builder (^24.13.3) – builds .exe
+
+Install with:
+
+```powershell
 npm install
-Update main.js with SERVER_URL (manager IP) + DEVICE_ID.
-Run: npm start
-Build .exe: npm run build-exe → install dist/ .exe
+```
 
-Dependencies Installation
+### Troubleshooting
 
-Root: npm install dotenv express node-kasa socket.io sqlite3
-Server: npm install express sqlite3 socket.io socket.io-client node-kasa
-Manager: npx create-react-app . then npm install socket.io-client react-toastify electron electron-is-dev @electron-forge/cli @electron-forge/maker-squirrel
-Client: npm install electron socket.io-client electron-builder electron-packager
-PS5: npm install node-kasa
+- No "Connected to server" → check IP, same Wi-Fi, firewall (port 3000 open on manager)
+- Overlay not closing → check password hash matches
+- Build fails → run VS Code as Administrator
 
-How to Use
+### Next Steps
 
-Manager: Start sessions, add extra time → client overlay closes.
-Client: Auto connects, shows overlay on time over, resume with password.
+- Copy .exe to each gaming PC
+- Change DEVICE_ID per PC
+- Add shortcut to Startup folder (auto-start)
+- Test full flow: session start → time over → overlay → password unlock
 
-Debugging
-
-Check server/client consoles for errors.
-Test /devices GET in browser.
-
-Known Limitations
-
-No user auth.
-Password hashed but local – not remote.
-PS5 hardware needs TP-Link Kasa plug.
-
-Future Improvements
-
-Auth for manager
-Reports
-Mobile manager app
-
-For GitHub: Add this README to root and push.
+Let me know if overlay closes after password, or if you want tray icon / silent mode next.
