@@ -1,0 +1,23 @@
+{
+  "name": "mario-gaming",
+  "version": "1.0.0",
+  "description": "Mario Gaming - Gaming Shop Management System",
+  "main": "server/index.js",
+  "scripts": {
+    "start-server": "node server/index.js",
+    "start-manager": "cd manager && npm start",
+    "build-manager": "cd manager && npm run make",
+    "start-client": "cd computer-client && electron .",
+    "build-client": "cd computer-client && electron-forge make"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "node-kasa": "^1.0.3",
+    "socket.io": "^4.7.5",
+    "sqlite3": "^5.1.7"
+  }
+}
